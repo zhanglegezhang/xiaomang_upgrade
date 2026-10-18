@@ -5,6 +5,10 @@ function Assert-SafePath([string]$Path) {
  }
 }
 function Get-ProductVersion([byte[]]$Bytes) {
+ if($Bytes.Length -gt 2 -and $Bytes[0] -eq 77 -and $Bytes[1] -eq 90){
+  if(!('XiaomangUpgrade.VersionReader' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'VersionReader.cs')}
+  return [XiaomangUpgrade.VersionReader]::Read($Bytes)
+ }
  # Read only embedded text; never load or execute the supplied assembly.
  $text=[Text.Encoding]::UTF8.GetString($Bytes)
  $header='小蟒版本日志';$start=$text.IndexOf($header,[StringComparison]::Ordinal)
@@ -23,7 +27,7 @@ function Get-ArchivePlan([string]$ZipPath) {
  try {
   if($zip.Entries.Count -gt 10000){throw '文件数超过上限。'}
   $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-  $entries=New-Object 'Collections.Generic.List[object]';$prefix=$null;$bytes=0L;$version=$null
+  $entries=New-Object 'Collections.Generic.List[object]';$prefix=$null;$bytes=0L;$version=$null;$startupCheck=$false
   foreach($item in $zip.Entries) {
    if(!$item.Name){continue}
    $parts=$item.FullName.Split('/')
@@ -38,12 +42,12 @@ function Get-ArchivePlan([string]$ZipPath) {
    if($rel -ieq 'ShareX.dll') {
     if($item.Length -gt 64MB){throw '主程序大小异常。'}
     $stream=$item.Open();$memory=New-Object IO.MemoryStream
-    try {$stream.CopyTo($memory);$version=Get-ProductVersion $memory.ToArray()}finally{$stream.Dispose();$memory.Dispose()}
+    try {$stream.CopyTo($memory);$binary=$memory.ToArray();$version=Get-ProductVersion $binary;$startupCheck=[Text.Encoding]::UTF8.GetString($binary).Contains('UpgradeStartupCheck')}finally{$stream.Dispose();$memory.Dispose()}
    }
    $entries.Add([pscustomobject]@{Name=$item.FullName;Relative=$rel;Bytes=$item.Length})
   }
   foreach($required in 'xiaomang.exe','ShareX.dll','ShareX.runtimeconfig.json','ShareX.deps.json','Portable'){if(!$seen.Contains($required)){throw "缺少必需文件：$required"}}
-  return [pscustomobject]@{Version=$version;Bytes=$bytes;Entries=$entries.ToArray()}
+  return [pscustomobject]@{Version=$version;Bytes=$bytes;Entries=$entries.ToArray();SupportsStartupCheck=$startupCheck}
  } finally {$zip.Dispose()}
 }
 function Expand-CheckedArchive($ZipPath,$Plan,$Payload,$App) {
@@ -83,4 +87,22 @@ function Backup-StableTree([string]$Root,[string]$Output) {
   }
   if($count -ne $before.Count -or @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force).Count -ne $count){throw '备份期间文件数量变化。'}
  }finally{$zip.Dispose()}
+}
+
+function Write-DataSnapshot([string]$App,[string]$InputRoot,[string]$Stage) {
+ $personal=Join-Path $App 'xiaomangtongxue'
+ $files=New-Object 'Collections.Generic.List[object]'
+ foreach($root in @($personal,$InputRoot)) {
+  Assert-SafePath $root
+  if(!(Test-Path -LiteralPath $root)){continue}
+  foreach($file in Get-ChildItem -LiteralPath $root -Recurse -File -Force) {
+   Assert-SafePath $file.FullName
+   $relative=$file.FullName.Substring($root.Length).TrimStart('\')
+   if($relative -match '^Logs\\' -or $file.Name -eq '.personal-transfer.lock'){continue}
+   $files.Add(@{Source=$file.FullName;Hash=(Get-FileHash -LiteralPath $file.FullName).Hash})
+  }
+ }
+ $path=Join-Path $Stage 'data-snapshot.json'
+ @{Personal=$personal;Input=$InputRoot;Files=$files.ToArray();Backup=(Join-Path $Stage 'old-app-backup.zip')}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath $path -Encoding UTF8
+ return $path
 }

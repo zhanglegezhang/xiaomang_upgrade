@@ -23,6 +23,7 @@ try {
  $oldVersion=Get-ProductVersion ([IO.File]::ReadAllBytes((Join-Path $App 'ShareX.dll')))
  Write-Host '正在检查使用包结构与版本…'
  $plan=Get-ArchivePlan $Package;Assert-Version $oldVersion $plan.Version
+ if(!$plan.SupportsStartupCheck){throw '目标使用包不支持升级后数据加载确认。请使用包含升级修复的新使用包；原程序未修改。'}
  if(!$ReleaseTag){
   $name=[IO.Path]::GetFileName($Package)
   if($name -match '(\d{4})-(\d{2})-(\d{2})'){$ReleaseTag='v'+$plan.Version+'-'+$Matches[1]+$Matches[2]+$Matches[3]}
@@ -77,7 +78,8 @@ try {
  Backup-StableTree $inputRoot (Join-Path $stage 'input-data-backup.zip')
  if((Get-ProductVersion ([IO.File]::ReadAllBytes((Join-Path $App 'ShareX.dll')))) -ne $oldVersion){throw '备份期间旧程序版本改变。'}
  # Keep the wrapper and its per-directory mutex alive until the transaction ends.
- @{App=$App;Stage=$stage;Payload=$payload;ProcessId=2147483647;Started=0}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $stage 'install.json') -Encoding UTF8
+ $snapshot=Write-DataSnapshot $App $inputRoot $stage
+ @{App=$App;Stage=$stage;Payload=$payload;Snapshot=$snapshot;ProcessId=2147483647;Started=0}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $stage 'install.json') -Encoding UTF8
  Write-Host '备份已完成，正在替换程序并验证启动，请勿关闭此窗口…'
  $helper=Start-Process powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"'+$PSScriptRoot+'\install.ps1"'),'-Config',('"'+$stage+'\install.json"'),'-NoUI') -WindowStyle Hidden -PassThru
  while(!$helper.WaitForExit(500)){ }
