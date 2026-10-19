@@ -78,12 +78,18 @@ try {
  Backup-StableTree $inputRoot (Join-Path $stage 'input-data-backup.zip')
  if((Get-ProductVersion ([IO.File]::ReadAllBytes((Join-Path $App 'ShareX.dll')))) -ne $oldVersion){throw '备份期间旧程序版本改变。'}
  # Keep the wrapper and its per-directory mutex alive until the transaction ends.
+ if(Test-Path -LiteralPath (Join-Path $App '.xiaomang-update.json')){throw '上次更新尚需恢复，请先运行程序目录中的恢复小蟒更新.cmd。'}
+ $recovery=Join-Path $App 'XiaomangUpdateRecovery.ps1'
+ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'XiaomangUpdateRecovery.ps1') -Destination $recovery -Force
+ [IO.File]::WriteAllText((Join-Path $App '恢复小蟒更新.cmd'),'@echo off'+"`r`n"+'setlocal DisableDelayedExpansion'+"`r`n"+'"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0XiaomangUpdateRecovery.ps1"'+"`r`n",[Text.Encoding]::ASCII)
+ $helperStage=Join-Path $stage 'attempt'
+ [IO.Directory]::CreateDirectory($helperStage)|Out-Null
  $snapshot=Write-DataSnapshot $App $inputRoot $stage
- @{App=$App;Stage=$stage;Payload=$payload;Snapshot=$snapshot;ProcessId=2147483647;Started=0}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $stage 'install.json') -Encoding UTF8
+ @{App=$App;Stage=$helperStage;Payload=$payload;RecoveryScript=$recovery;Snapshot=$snapshot;ProcessId=2147483647;Started=0}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $stage 'install.json') -Encoding UTF8
  Write-Host '备份已完成，正在替换程序并验证启动，请勿关闭此窗口…'
  $helper=Start-Process powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"'+$PSScriptRoot+'\install.ps1"'),'-Config',('"'+$stage+'\install.json"'),'-NoUI') -WindowStyle Hidden -PassThru
  while(!$helper.WaitForExit(500)){ }
- $result=Join-Path $stage 'result.txt'
+ $result=Join-Path $helperStage 'result.txt'
  if(!(Test-Path -LiteralPath $result)){throw "升级助手意外结束，请保留备份并检查目录：$stage"}
  $message=Get-Content -LiteralPath $result -Raw -Encoding UTF8
  Write-Host $message
@@ -94,7 +100,7 @@ try {
  exit 0
 } catch {
  $reason=$_.Exception.Message
- if($helper -and !$helper.HasExited){Set-Content -LiteralPath (Join-Path $stage 'cancel') -Value cancel;if(!$helper.WaitForExit(5000)){$helper.Kill();$helper.WaitForExit()}}
+ if($helper -and !$helper.HasExited){Set-Content -LiteralPath (Join-Path $helperStage 'cancel') -Value cancel;if(!$helper.WaitForExit(5000)){$helper.Kill();$helper.WaitForExit()}}
  if($stopped -and !(Get-Process xiaomang -ErrorAction SilentlyContinue|Where-Object Path -eq $entry)){Start-Process -FilePath $entry -ArgumentList '-silent' -WorkingDirectory $App -WindowStyle Hidden}
  if($stage){try{Stop-Transcript|Out-Null}catch{}}
  if($NonInteractive){Write-Error $reason -ErrorAction Continue}else{[Windows.Forms.MessageBox]::Show("升级未完成：$reason`n请保留备份，并查看 result.txt 确认恢复状态。备份目录：$stage",'小蟒通用升级','OK','Warning')|Out-Null}
